@@ -1,7 +1,9 @@
-import configparser
 import os
-import pandas as pd
+import numpy as np
+from skimage.io import imread
+from skimage.transform import resize
 from sklearn.model_selection import train_test_split
+import configparser
 import sys
 import traceback
 
@@ -14,65 +16,108 @@ SHOW_LOG = True
 class DataMaker():
 
     def __init__(self) -> None:
+        '''Создаёт логгер, определяет пути к папкам и файлам'''
         logger = Logger(SHOW_LOG)
         self.config = configparser.ConfigParser()
         self.log = logger.get_logger(__name__)
         self.project_path = os.path.join(os.getcwd(), "data")
-        self.data_path = os.path.join(self.project_path, "Iris.csv")
-        self.X_path = os.path.join(self.project_path, "Iris_X.csv")
-        self.y_path = os.path.join(self.project_path, "Iris_y.csv")
-        self.train_path = [os.path.join(self.project_path, "Train_Iris_X.csv"), os.path.join(
-            self.project_path, "Train_Iris_y.csv")]
-        self.test_path = [os.path.join(self.project_path, "Test_Iris_X.csv"), os.path.join(
-            self.project_path, "Test_Iris_y.csv")]
-        self.log.info("DataMaker is ready")
+        self.data_dir = os.path.join(self.project_path, "imagenet_tiny")  # ← папка с картинками
+        self.X_train_path = os.path.join(self.project_path, "X_train.npy")
+        self.y_train_path = os.path.join(self.project_path, "y_train.npy")
+        self.X_test_path = os.path.join(self.project_path, "X_test.npy")
+        self.y_test_path = os.path.join(self.project_path, "y_test.npy")
+        self.log.info("DataMaker for ImageNet is ready")
+
+    def load_images_from_folder(self, folder_path: str, class_id: int):
+        """Загружает все картинки из папки класса (без вложенной папки images)"""
+        X = []
+        y = []
+    
+        if not os.path.exists(folder_path):
+            self.log.error(f"Папка не найдена: {folder_path}")
+            return X, y
+    
+        for img_file in os.listdir(folder_path):
+            if img_file.lower().endswith(('.jpeg', '.jpg')):
+                img_path = os.path.join(folder_path, img_file)
+                try:
+                    img = imread(img_path)
+                    img = resize(img, (28, 28))
+                    X.append(img.flatten())
+                    y.append(class_id)
+                except Exception as e:
+                    self.log.error(f"Ошибка загрузки {img_path}: {e}")
+    
+        self.log.info(f"  Загружено {len(X)} картинок для класса {class_id}")
+        return X, y
 
     def get_data(self) -> bool:
-        dataset = pd.read_csv(self.data_path)
-        X = pd.DataFrame(dataset.iloc[:, 1:5].values)
-        y = pd.DataFrame(dataset.iloc[:, 5:].values)
-        X.to_csv(self.X_path, index=True)
-        y.to_csv(self.y_path, index=True)
-        if os.path.isfile(self.X_path) and os.path.isfile(self.y_path):
-            self.log.info("X and y data is ready")
-            self.config["DATA"] = {'X_data': self.X_path,
-                                   'y_data': self.y_path}
-            return os.path.isfile(self.X_path) and os.path.isfile(self.y_path)
-        else:
-            self.log.error("X and y data is not ready")
+        """Проходит по всем классам в imagenet_tiny, собирает все картинки, сохраняет в X_train.npy и y_train.npy"""
+        X_all = []
+        y_all = []
+        
+        for class_id, class_name in enumerate(os.listdir(self.data_dir)):
+            class_path = os.path.join(self.data_dir, class_name)
+            self.log.info(f"Загрузка класса {class_name} (id={class_id})")
+            
+            X_class, y_class = self.load_images_from_folder(class_path, class_id)
+            X_all.extend(X_class)
+            y_all.extend(y_class)
+        
+        if len(X_all) == 0:
+            self.log.error("Не загружено ни одной картинки")
             return False
+        
+        # Сохраняем как .npy
+        np.save(self.X_train_path, np.array(X_all))
+        np.save(self.y_train_path, np.array(y_all))
+        
+        self.log.info(f"Всего загружено {len(X_all)} картинок")
+        self.log.info(f"Размер одного изображения: {len(X_all[0])} пикселей")
+        
+        self.config["DATA"] = {
+            'X_data': self.X_train_path,
+            'y_data': self.y_train_path
+        }
+        
+        return os.path.isfile(self.X_train_path) and os.path.isfile(self.y_train_path)
 
     def split_data(self, test_size=TEST_SIZE) -> bool:
+        """Делит данные на обучающую (80%) и тестовую (20%), сохраняет отдельно, записывает пути в config.ini"""
         self.get_data()
+        
         try:
-            X = pd.read_csv(self.X_path, index_col=0)
-            y = pd.read_csv(self.y_path, index_col=0)
+            X = np.load(self.X_train_path)
+            y = np.load(self.y_train_path)
         except FileNotFoundError:
             self.log.error(traceback.format_exc())
             sys.exit(1)
+        
         X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=0)
-        self.save_splitted_data(X_train, self.train_path[0])
-        self.save_splitted_data(y_train, self.train_path[1])
-        self.save_splitted_data(X_test, self.test_path[0])
-        self.save_splitted_data(y_test, self.test_path[1])
-        self.config["SPLIT_DATA"] = {'X_train': self.train_path[0],
-                                     'y_train': self.train_path[1],
-                                     'X_test': self.test_path[0],
-                                     'y_test': self.test_path[1]}
-        self.log.info("Train and test data is ready")
+            X, y, test_size=test_size, random_state=42
+        )
+        
+        np.save(self.X_train_path, X_train)
+        np.save(self.y_train_path, y_train)
+        np.save(self.X_test_path, X_test)
+        np.save(self.y_test_path, y_test)
+        
+        self.config["SPLIT_DATA"] = {
+            'X_train': self.X_train_path,
+            'y_train': self.y_train_path,
+            'X_test': self.X_test_path,
+            'y_test': self.y_test_path
+        }
+        
+        self.log.info(f"Train data: {X_train.shape}, Test data: {X_test.shape}")
+        
         with open('config.ini', 'w') as configfile:
             self.config.write(configfile)
-        return os.path.isfile(self.train_path[0]) and\
-            os.path.isfile(self.train_path[1]) and\
-            os.path.isfile(self.test_path[0]) and \
-            os.path.isfile(self.test_path[1])
-
-    def save_splitted_data(self, df: pd.DataFrame, path: str) -> bool:
-        df = df.reset_index(drop=True)
-        df.to_csv(path, index=True)
-        self.log.info(f'{path} is saved')
-        return os.path.isfile(path)
+        
+        return os.path.isfile(self.X_train_path) and \
+               os.path.isfile(self.y_train_path) and \
+               os.path.isfile(self.X_test_path) and \
+               os.path.isfile(self.y_test_path)
 
 
 if __name__ == "__main__":
