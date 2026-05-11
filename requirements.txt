@@ -1,12 +1,12 @@
 coverage==6.5.0
 dvc==2.28.0
 numpy==1.23.1
-pandas==1.1.3
+pandas==2.2.3
 scikit-learn==1.1.1
 pyyaml==5.3.1
 
-scikit-image
-pillow
-fastapi
-uvicorn
-pytest
+scikit-image==0.21.0
+pillow==9.5.0
+fastapi==0.95.2
+uvicorn==0.22.0
+pytest==7.3.1
