@@ -1,10 +1,12 @@
 import pickle
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, File, UploadFile
 from pydantic import BaseModel
 from typing import List
 import os
 from src.logger import Logger
+from PIL import Image
+import io
 
 SHOW_LOG = True
 
@@ -42,10 +44,10 @@ class ImageResponse(BaseModel):
     confidence: float  # уверенность модели (не точная, примерная)
 
 
-# Словарь для преобразования ID класса в название (если знаешь названия)
+# Словарь для преобразования ID класса в название
 CLASS_NAMES = {
-    0: "class_0",
-    1: "class_1",
+    0: "spider",
+    1: "slug",
 }
 
 
@@ -67,7 +69,7 @@ def health():
 
 @app.post("/predict", response_model=ImageResponse)
 def predict(request: ImageRequest):
-    """Предсказание класса изображения"""
+    """Предсказание класса изображения (по вектору пикселей)"""
     if model is None:
         raise HTTPException(status_code=500, detail="Модель не загружена")
     
@@ -103,6 +105,50 @@ def predict(request: ImageRequest):
     
     except Exception as e:
         logger.error(f"Ошибка при предсказании: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/predict_image")
+async def predict_image(file: UploadFile = File(...)):
+    """Загрузи картинку (jpg/png) → получи предсказание (spider/slug)"""
+    if model is None:
+        raise HTTPException(status_code=500, detail="Модель не загружена")
+    
+    try:
+        # Читаем файл
+        contents = await file.read()
+        image = Image.open(io.BytesIO(contents))
+        
+        # Превращаем в 28×28 RGB
+        image = image.convert('RGB')
+        image = image.resize((28, 28))
+        
+        # Превращаем в вектор
+        pixels = np.array(image).flatten() / 255.0
+        
+        # Проверяем размер
+        if len(pixels) != 2352:
+            raise HTTPException(status_code=400, detail=f"Ожидается 2352 пикселя, получено {len(pixels)}")
+        
+        # Предсказание
+        prediction = model.predict([pixels])[0]
+        class_name = CLASS_NAMES.get(prediction, f"class_{prediction}")
+        
+        # Уверенность
+        probabilities = model.predict_proba([pixels])[0]
+        confidence = float(max(probabilities))
+        
+        logger.info(f"Загружена картинка: предсказание {prediction} ({class_name}), уверенность: {confidence:.3f}")
+        
+        return {
+            "prediction": int(prediction),
+            "class_name": class_name,
+            "confidence": confidence,
+            "file_name": file.filename
+        }
+    
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке картинки: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
