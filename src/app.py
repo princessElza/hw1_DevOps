@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List
 import os
-from logger import Logger
+from src.logger import Logger
 
 SHOW_LOG = True
 
