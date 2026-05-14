@@ -19,7 +19,7 @@ pipeline {
         }
         stage('Run Tests') {
             steps {
-                sh 'pytest tests/ -v'
+                sh 'pytest src/unit_tests/ -v'
             }
         }
         stage('Build Docker Image') {
