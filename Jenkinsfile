@@ -1,5 +1,11 @@
+groovy
 pipeline {
-    agent any
+    agent {
+        docker {
+            image 'python:3.10'
+            args '-v /var/run/docker.sock:/var/run/docker.sock'
+        }
+    }
     
     stages {
         stage('Checkout') {
@@ -8,23 +14,16 @@ pipeline {
             }
         }
         
-        stage('Setup Python') {
-            steps {
-                sh 'python3 --version'
-                sh 'python3 -m venv venv'
-                sh 'venv/bin/pip install --upgrade pip setuptools wheel'
-            }
-        }
-        
         stage('Install Dependencies') {
             steps {
-                sh 'venv/bin/pip install -r requirements.txt'
+                sh 'pip install --upgrade pip setuptools wheel'
+                sh 'pip install -r requirements.txt'
             }
         }
         
         stage('Run Tests') {
             steps {
-                sh 'venv/bin/pytest src/tests/ -v'
+                sh 'pytest src/tests/ -v'
             }
         }
         
