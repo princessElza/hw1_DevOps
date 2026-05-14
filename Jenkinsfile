@@ -10,19 +10,20 @@ pipeline {
         
         stage('Setup Python') {
             steps {
-                sh 'python3 --version || python --version'
+                sh 'python3 --version'
+                sh 'python3 -m venv venv'
             }
         }
         
         stage('Install Dependencies') {
             steps {
-                sh 'pip install -r requirements.txt'
+                sh 'venv/bin/pip install -r requirements.txt'
             }
         }
         
         stage('Run Tests') {
             steps {
-                sh 'pytest src/tests/ -v'
+                sh 'venv/bin/pytest src/tests/ -v'
             }
         }
         
