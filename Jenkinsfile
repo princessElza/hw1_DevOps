@@ -1,3 +1,4 @@
+groovy
 pipeline {
     agent any
     
@@ -12,6 +13,7 @@ pipeline {
             steps {
                 sh 'python3 --version'
                 sh 'python3 -m venv venv'
+                sh 'venv/bin/pip install --upgrade pip setuptools wheel'
             }
         }
         
