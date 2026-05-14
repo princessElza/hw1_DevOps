@@ -13,6 +13,7 @@ pipeline {
         }
         stage('Install Dependencies') {
             steps {
+                sh 'apt-get update && apt-get install -y docker.io'
                 sh 'pip install --upgrade pip setuptools wheel'
                 sh 'pip install -r requirements.txt'
             }
