@@ -21,7 +21,7 @@ class ModelTrainer:
         self.y_train_path = os.path.join(self.project_path, "y_train.npy")
         self.X_test_path = os.path.join(self.project_path, "X_test.npy")
         self.y_test_path = os.path.join(self.project_path, "y_test.npy")
-        self.model_path = os.path.join(os.getcwd(), "models", "model.pkl")
+        self.model_path = "models/model.pkl"
         
         self.log.info("ModelTrainer for ImageNet is ready")
 
