@@ -10,29 +10,35 @@ pipeline {
         
         stage('Setup Python') {
             steps {
-                bat 'python --version'
+                sh 'python --version'
             }
         }
         
         stage('Install Dependencies') {
             steps {
-                bat 'pip install -r requirements.txt'
+                sh 'pip install -r requirements.txt'
             }
         }
         
         stage('Run Tests') {
             steps {
-                bat 'pytest src/tests/ -v'
+                sh 'pytest src/tests/ -v'
             }
         }
         
         stage('Build Docker Image') {
             steps {
-                bat 'docker build -t imagenet-classifier .'
+                sh 'docker build -t imagenet-classifier .'
             }
         }
     }
+    
+    post {
+        success {
+            echo 'Pipeline completed successfully! ✅'
+        }
+        failure {
+            echo 'Pipeline failed! ❌'
+        }
+    }
 }
-
-
-
