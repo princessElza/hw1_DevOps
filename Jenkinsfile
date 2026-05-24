@@ -29,14 +29,13 @@ pipeline {
             }
         }
         stage('Functional Test') {
-    steps {
-        sh 'docker rm -f test-api || true'
-        sh 'docker run -d --network host --name test-api imagenet-classifier'
-        sh 'sleep 5'
-        sh 'curl -f http://localhost:8000/health || exit 1'
-        sh 'docker stop test-api && docker rm test-api'
-    }
-}
+            steps {
+                sh 'docker run -d -p 8000:8000 --name test-api imagenet-classifier'
+                sh 'sleep 10'
+                sh 'curl -f http://172.17.0.1:8000/health || exit 1'
+                sh 'docker stop test-api && docker rm test-api'
+            }
+        }
         stage('Push to DockerHub') {
             steps {
                 withCredentials([usernamePassword(credentialsId: 'docker-hub', 
@@ -58,4 +57,3 @@ pipeline {
         }
     }
 }
-
