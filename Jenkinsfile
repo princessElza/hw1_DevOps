@@ -30,11 +30,10 @@ pipeline {
         }
         stage('Functional Test') {
     steps {
-        sh 'docker network create my-network || true'
         sh 'docker rm -f test-api || true'
-        sh 'docker run -d --network my-network --name test-api imagenet-classifier'
+        sh 'docker run -d --network host --name test-api imagenet-classifier'
         sh 'sleep 5'
-        sh 'curl -f http://test-api:8000/health || exit 1'
+        sh 'curl -f http://localhost:8000/health || exit 1'
         sh 'docker stop test-api && docker rm test-api'
     }
 }
