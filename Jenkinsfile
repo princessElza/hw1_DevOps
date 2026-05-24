@@ -37,6 +37,17 @@ pipeline {
                 sh 'docker stop test-api && docker rm test-api'
             }
         }
+        stage('Push to DockerHub') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'docker-hub', 
+                                                  usernameVariable: 'DOCKER_USER', 
+                                                  passwordVariable: 'DOCKER_PASS')]) {
+                    sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
+                    sh 'docker tag imagenet-classifier $DOCKER_USER/imagenet-classifier:latest'
+                    sh 'docker push $DOCKER_USER/imagenet-classifier:latest'
+                }
+            }
+        }
     }
     post {
         success {
@@ -47,3 +58,4 @@ pipeline {
         }
     }
 }
+
