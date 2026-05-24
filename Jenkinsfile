@@ -31,6 +31,7 @@ pipeline {
         stage('Functional Test') {
     steps {
         sh 'docker network create my-network || true'
+        sh 'docker rm -f test-api || true'
         sh 'docker run -d --network my-network --name test-api imagenet-classifier'
         sh 'sleep 5'
         sh 'curl -f http://test-api:8000/health || exit 1'
