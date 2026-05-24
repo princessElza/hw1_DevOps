@@ -33,7 +33,7 @@ pipeline {
                 sh 'docker rm -f test-api || true'
                 sh 'docker run -d -p 8000:8000 --name test-api imagenet-classifier'
                 sh 'sleep 5'
-                sh 'curl -f http://localhost:8000/health || exit 1'
+                sh 'curl -f http://host.docker.internal:8000/health || exit 1'
                 sh 'docker stop test-api && docker rm test-api'
             }
         }
