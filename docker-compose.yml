@@ -1,20 +1,51 @@
 version: '3.8'
 
 services:
-  imagenet-api:
+  # База данных PostgreSQL
+  postgres:
+    image: postgres:15
+    container_name: postgres_db
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ml-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  #  ML модель
+  model-api:
     build: .
     container_name: imagenet-classifier
     ports:
       - "8000:8000"
-    volumes:
-      - ./logs:/app/logs
-      - ./models:/app/models
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
-      - PYTHONUNBUFFERED=1
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+    volumes:
+      - ./models:/app/models
+    networks:
+      - ml-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
+
+networks:
+  ml-network:
+    driver: bridge
+
+volumes:
+  postgres_data:

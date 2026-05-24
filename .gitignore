@@ -130,3 +130,5 @@ dmypy.json
 
 # Place data for non local DVC
 # /data 
+
+.env

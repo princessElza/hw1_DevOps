@@ -7,6 +7,7 @@ import os
 from src.logger import Logger
 from PIL import Image
 import io
+import psycopg2
 
 SHOW_LOG = True
 
@@ -22,6 +23,34 @@ try:
 except FileNotFoundError:
     logger.error(f"Модель не найдена по пути {model_path}")
     model = None
+
+# Инициализация базы данных
+if model is not None:
+    try:
+        import psycopg2
+        conn = psycopg2.connect(
+            host=os.getenv('DB_HOST', 'localhost'),
+            user=os.getenv('DB_USER'),
+            password=os.getenv('DB_PASSWORD'),
+            database=os.getenv('DB_NAME')
+        )
+        cur = conn.cursor()
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS predictions (
+                id SERIAL PRIMARY KEY,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                prediction INTEGER,
+                class_name VARCHAR(50),
+                confidence FLOAT,
+                file_name VARCHAR(255)
+            )
+        ''')
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info("База данных инициализирована")
+    except Exception as e:
+        logger.warning(f"БД не доступна: {e}")
 
 # Создаём приложение FastAPI
 app = FastAPI(
@@ -50,6 +79,64 @@ CLASS_NAMES = {
     1: "slug",
 }
 
+# ========== НОВЫЕ ФУНКЦИИ ДЛЯ БАЗЫ ДАННЫХ ==========
+
+def get_db_connection():
+    """Подключение к PostgreSQL"""
+    try:
+        conn = psycopg2.connect(
+            host=os.getenv('DB_HOST', 'localhost'),
+            port=os.getenv('DB_PORT', '5432'),
+            user=os.getenv('DB_USER'),
+            password=os.getenv('DB_PASSWORD'),
+            database=os.getenv('DB_NAME')
+        )
+        return conn
+    except Exception as e:
+        logger.error(f"Ошибка подключения к БД: {e}")
+        return None
+
+def init_db():
+    """Создаёт таблицу для хранения предсказаний"""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute('''
+                CREATE TABLE IF NOT EXISTS predictions (
+                    id SERIAL PRIMARY KEY,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    prediction INTEGER,
+                    class_name VARCHAR(50),
+                    confidence FLOAT,
+                    file_name VARCHAR(255)
+                )
+            ''')
+            conn.commit()
+            cur.close()
+            logger.info("Таблица predictions создана/проверена")
+        except Exception as e:
+            logger.error(f"Ошибка инициализации БД: {e}")
+        finally:
+            conn.close()
+
+def save_to_db(prediction, class_name, confidence, file_name=None):
+    """Сохраняет предсказание в базу данных"""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO predictions (prediction, class_name, confidence, file_name) VALUES (%s, %s, %s, %s)",
+                (prediction, class_name, confidence, file_name)
+            )
+            conn.commit()
+            cur.close()
+            logger.info(f"Предсказание сохранено в БД: {class_name}")
+        except Exception as e:
+            logger.error(f"Ошибка сохранения в БД: {e}")
+        finally:
+            conn.close()
 
 @app.get("/")
 def root():
@@ -137,6 +224,26 @@ async def predict_image(file: UploadFile = File(...)):
         # Уверенность
         probabilities = model.predict_proba([pixels])[0]
         confidence = float(max(probabilities))
+
+         # Сохраняем в БД
+        try:
+            import psycopg2
+            conn = psycopg2.connect(
+                host=os.getenv('DB_HOST', 'localhost'),
+                user=os.getenv('DB_USER'),
+                password=os.getenv('DB_PASSWORD'),
+                database=os.getenv('DB_NAME')
+            )
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO predictions (prediction, class_name, confidence, file_name) VALUES (%s, %s, %s, %s)",
+                (int(prediction), class_name, confidence, file.filename)
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            logger.warning(f"Не удалось сохранить в БД: {e}")
         
         logger.info(f"Загружена картинка: предсказание {prediction} ({class_name}), уверенность: {confidence:.3f}")
         
@@ -161,6 +268,25 @@ def info():
         "num_classes": 2,
         "classes": CLASS_NAMES
     }
+
+@app.get("/predictions")
+def get_predictions():
+    try:
+        import psycopg2
+        conn = psycopg2.connect(
+            host=os.getenv('DB_HOST', 'localhost'),
+            user=os.getenv('DB_USER'),
+            password=os.getenv('DB_PASSWORD'),
+            database=os.getenv('DB_NAME')
+        )
+        cur = conn.cursor()
+        cur.execute("SELECT id, timestamp, prediction, class_name, confidence, file_name FROM predictions ORDER BY timestamp DESC LIMIT 20")
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return {"predictions": [{"id": r[0], "timestamp": str(r[1]), "prediction": r[2], "class_name": r[3], "confidence": r[4], "file_name": r[5]} for r in rows]}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 if __name__ == "__main__":
