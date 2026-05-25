@@ -12,3 +12,4 @@ uvicorn==0.22.0
 pytest==7.3.1
 python-multipart
 psycopg2-binary
+requests>=2.28.0

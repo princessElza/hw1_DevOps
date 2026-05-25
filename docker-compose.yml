@@ -1,6 +1,32 @@
 version: '3.8'
 
 services:
+  # Хранилище секретов Vault
+  vault:
+    image: vault:latest
+    container_name: vault-secrets
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_TOKEN}
+      VAULT_ADDR: http://0.0.0.0:8200
+      VAULT_API_ADDR: http://vault:8200
+      VAULT_LOG_LEVEL: debug
+    ports:
+      - "8200:8200"
+    volumes:
+      - vault_data:/vault/data
+      - ./scripts/vault-init.sh:/vault/vault-init.sh:ro
+    networks:
+      - ml-network
+    cap_add:
+      - IPC_LOCK
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8200/v1/sys/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    command: server -dev
+
   # База данных PostgreSQL
   postgres:
     image: postgres:15
@@ -21,6 +47,9 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    depends_on:
+      vault:
+        condition: service_healthy
 
   #  ML модель
   model-api:
@@ -37,6 +66,9 @@ services:
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME}
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_TOKEN}
+      USE_VAULT: ${USE_VAULT:-true}
     volumes:
       - ./models:/app/models
     networks:
@@ -49,3 +81,4 @@ networks:
 
 volumes:
   postgres_data:
+  vault_data:

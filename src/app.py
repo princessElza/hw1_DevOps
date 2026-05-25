@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from typing import List
 import os
 from src.logger import Logger
+from src.vault_secrets import vault_client
 from PIL import Image
 import io
 import psycopg2
@@ -24,15 +25,17 @@ except FileNotFoundError:
     logger.error(f"Модель не найдена по пути {model_path}")
     model = None
 
-# Инициализация базы данных
+# Инициализация базы данных с использованием Vault
 if model is not None:
     try:
         import psycopg2
+        db_creds = vault_client.get_db_credentials()
         conn = psycopg2.connect(
-            host=os.getenv('DB_HOST', 'localhost'),
-            user=os.getenv('DB_USER'),
-            password=os.getenv('DB_PASSWORD'),
-            database=os.getenv('DB_NAME')
+            host=db_creds['host'],
+            port=db_creds['port'],
+            user=db_creds['user'],
+            password=db_creds['password'],
+            database=db_creds['database']
         )
         cur = conn.cursor()
         cur.execute('''
@@ -48,7 +51,7 @@ if model is not None:
         conn.commit()
         cur.close()
         conn.close()
-        logger.info("База данных инициализирована")
+        logger.info("База данных инициализирована (учетные данные из Vault)")
     except Exception as e:
         logger.warning(f"БД не доступна: {e}")
 
@@ -82,14 +85,15 @@ CLASS_NAMES = {
 # ========== НОВЫЕ ФУНКЦИИ ДЛЯ БАЗЫ ДАННЫХ ==========
 
 def get_db_connection():
-    """Подключение к PostgreSQL"""
+    """Подключение к PostgreSQL с использованием Vault"""
     try:
+        db_creds = vault_client.get_db_credentials()
         conn = psycopg2.connect(
-            host=os.getenv('DB_HOST', 'localhost'),
-            port=os.getenv('DB_PORT', '5432'),
-            user=os.getenv('DB_USER'),
-            password=os.getenv('DB_PASSWORD'),
-            database=os.getenv('DB_NAME')
+            host=db_creds['host'],
+            port=int(db_creds['port']),
+            user=db_creds['user'],
+            password=db_creds['password'],
+            database=db_creds['database']
         )
         return conn
     except Exception as e:
@@ -225,25 +229,8 @@ async def predict_image(file: UploadFile = File(...)):
         probabilities = model.predict_proba([pixels])[0]
         confidence = float(max(probabilities))
 
-         # Сохраняем в БД
-        try:
-            import psycopg2
-            conn = psycopg2.connect(
-                host=os.getenv('DB_HOST', 'localhost'),
-                user=os.getenv('DB_USER'),
-                password=os.getenv('DB_PASSWORD'),
-                database=os.getenv('DB_NAME')
-            )
-            cur = conn.cursor()
-            cur.execute(
-                "INSERT INTO predictions (prediction, class_name, confidence, file_name) VALUES (%s, %s, %s, %s)",
-                (int(prediction), class_name, confidence, file.filename)
-            )
-            conn.commit()
-            cur.close()
-            conn.close()
-        except Exception as e:
-            logger.warning(f"Не удалось сохранить в БД: {e}")
+        # Сохраняем в БД с использованием Vault
+        save_to_db(int(prediction), class_name, confidence, file.filename)
         
         logger.info(f"Загружена картинка: предсказание {prediction} ({class_name}), уверенность: {confidence:.3f}")
         
