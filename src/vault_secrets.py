@@ -92,21 +92,32 @@ class VaultSecrets:
     
     def get_db_credentials(self) -> Dict[str, str]:
         """Получить учетные данные БД из Vault или переменных окружения"""
+        credentials = {
+            'host': 'localhost',
+            'port': '5432',
+            'user': None,
+            'password': None,
+            'database': None,
+        }
+        
+        # Сначала пытаемся получить из Vault
         if self.use_vault:
             vault_secret = self.get_secret("database/credentials")
             if vault_secret:
+                logger.info("Учетные данные БД получены из Vault")
                 return {
-                    'host': vault_secret.get('DB_HOST', os.getenv('DB_HOST', 'localhost')),
-                    'port': vault_secret.get('DB_PORT', os.getenv('DB_PORT', '5432')),
-                    'user': vault_secret.get('DB_USER', os.getenv('DB_USER')),
-                    'password': vault_secret.get('DB_PASSWORD', os.getenv('DB_PASSWORD')),
-                    'database': vault_secret.get('DB_NAME', os.getenv('DB_NAME')),
+                    'host': vault_secret.get('DB_HOST', credentials['host']),
+                    'port': vault_secret.get('DB_PORT', credentials['port']),
+                    'user': vault_secret.get('DB_USER'),
+                    'password': vault_secret.get('DB_PASSWORD'),
+                    'database': vault_secret.get('DB_NAME'),
                 }
         
         # Fallback на переменные окружения
+        logger.info("Учетные данные БД получены из переменных окружения")
         return {
-            'host': os.getenv('DB_HOST', 'localhost'),
-            'port': os.getenv('DB_PORT', '5432'),
+            'host': os.getenv('DB_HOST', credentials['host']),
+            'port': os.getenv('DB_PORT', credentials['port']),
             'user': os.getenv('DB_USER'),
             'password': os.getenv('DB_PASSWORD'),
             'database': os.getenv('DB_NAME'),
