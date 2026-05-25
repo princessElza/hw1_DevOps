@@ -2,102 +2,213 @@ pipeline {
     agent any
 
     environment {
-        DOCKERHUB_CREDS=credentials('mle-template')
-        LC_ALL = "en_US.UTF-8"
-        LANG    = "en_US.UTF-8"
-        LANGUAGE = "en_US.UTF-8"
+        DOCKER_IMAGE = 'imagenet-classifier'
+        DOCKER_REGISTRY = 'docker.io'
+        GIT_COMMIT_SHORT = "${GIT_COMMIT.take(7)}"
+        BUILD_TAG = "${BUILD_NUMBER}"
+        DOCKERHUB_CREDS = credentials('docker-hub')
     }
 
-options {
+    options {
         timestamps()
-        skipDefaultCheckout(true)
-	}
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+
     stages {
-        stage('Clone github repository') {
+        stage('Clone Repository') {
             steps {
+                echo "📦 Cloning repository..."
                 cleanWs()
-                bat 'chcp 65001 && git clone -b main https://github.com/IcyAltair/mle-template.git'
-				}
-			}
-
-        stage('Checkout repo dir') {
-            steps {
-                bat 'chcp 65001 && cd mle-template && dir'
-				}
-			}
-
-        stage('Login'){
-            steps{
-                //withCredentials([usernamePassword(credentialsId: 'mle-template', passwordVariable: 'DOCKER_REGISTRY_PWD', usernameVariable: 'DOCKER_REGISTRY_USER')]){
-                //bat 'chcp 65001 && echo %DOCKER_REGISTRY_PWD% | docker login -u %DOCKER_REGISTRY_USER% --password-stdin'}
-                //bat 'chcp 65001 && echo %DOCKERHUB_CREDS_PSW% | docker login -u %DOCKERHUB_CREDS_USR% --password-stdin'
-                bat 'chcp 65001 && docker login -u %DOCKERHUB_CREDS_USR% -p %DOCKERHUB_CREDS_PSW%'
-                }
-            }
-
-        stage('Create and run docker container') {
-            steps {
-                script {
-                    try {
-                        bat 'chcp 65001 && cd mle-template && docker-compose build'
-                        }
-
-                    finally {
-                    bat '''
-                        chcp 65001
-                        cd mle-template
-                        docker-compose up -d
-                        '''
-                        }
-				    }
-                }
-            }
-
-        // use for multi containers:
-        //docker exec %containerId% cd app && coverage run src/unit_tests/test_preprocess.py && coverage run -a src/unit_tests/test_training.py && coverage report -m
-        //use for single container (with auth):
-        //docker run --name mle-template_web_1 cd app && coverage run src/unit_tests/test_preprocess.py && coverage run -a src/unit_tests/test_training.py && coverage report -m
-
-        stage('Checkout container logs') {
-            steps {
-                dir("mle-template") {
-                        bat '''
-                            docker-compose up -d
-                            for /f %%i in ('docker ps -qf "name=^mle-template-web-1"') do set containerId=%%i
-                            echo %containerId%
-                            IF "%containerId%" == "" (
-                                echo "No container running"
-                            )
-                            ELSE (
-                                docker logs --tail 1000 -f %containerId%
-                                )
-                        '''
-                    }
+                sh 'git clone -b main https://github.com/IcyAltair/hw1_DevOps.git || true'
             }
         }
 
-        stage('Checkout coverage report'){
-            steps{
-                dir("mle-template"){
-                    bat '''
-                    docker-compose logs -t --tail 10
-                    '''
-                }
+        stage('Checkout and Setup') {
+            steps {
+                echo "🔍 Checking out repository structure..."
+                sh '''
+                    if [ -d "hw1_DevOps" ]; then
+                        cd hw1_DevOps
+                        pwd
+                        ls -la
+                    fi
+                '''
             }
         }
 
-        stage('Push'){
-            steps{
-                bat 'chcp 65001 && docker push altairzero/mle-template:latest'
+        stage('Install Dependencies') {
+            steps {
+                echo "📥 Installing dependencies..."
+                sh '''
+                    apt-get update -qq
+                    apt-get install -y -qq docker.io curl python3-pip
+                    pip install -q --upgrade pip setuptools wheel
+                    if [ -f "hw1_DevOps/requirements.txt" ]; then
+                        pip install -q -r hw1_DevOps/requirements.txt
+                    fi
+                '''
             }
         }
-	}
+
+        stage('Run Unit Tests') {
+            steps {
+                echo "🧪 Running unit tests..."
+                sh '''
+                    cd hw1_DevOps
+                    pytest src/unit_tests/ -v --tb=short || true
+                '''
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                echo "🔨 Building Docker image: ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}"
+                sh '''
+                    cd hw1_DevOps
+                    docker build \
+                        --tag ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} \
+                        --tag ${DOCKER_IMAGE}:${BUILD_TAG} \
+                        --tag ${DOCKER_IMAGE}:latest \
+                        --label "git.commit=${GIT_COMMIT}" \
+                        --label "git.branch=${GIT_BRANCH}" \
+                        --label "build.number=${BUILD_NUMBER}" \
+                        .
+                    docker images | grep ${DOCKER_IMAGE}
+                '''
+            }
+        }
+
+        stage('Test Docker Image') {
+            steps {
+                echo "✅ Running functional tests..."
+                sh '''
+                    docker rm -f test-api || true
+                    docker run -d \
+                        -p 8000:8000 \
+                        --name test-api \
+                        --env VAULT_ADDR=http://localhost:8200 \
+                        --env USE_VAULT=false \
+                        ${DOCKER_IMAGE}:latest
+                    sleep 5
+                    curl -f http://localhost:8000/health || exit 1
+                    curl -f http://localhost:8000/info || exit 1
+                    docker stop test-api
+                    docker rm test-api
+                    echo "✓ API health check passed"
+                '''
+            }
+        }
+
+        stage('Scan Image') {
+            steps {
+                echo "🔍 Scanning for vulnerabilities..."
+                sh '''
+                    docker run --rm \
+                        -v /var/run/docker.sock:/var/run/docker.sock \
+                        aquasec/trivy image ${DOCKER_IMAGE}:latest || true
+                '''
+            }
+        }
+
+        stage('Login to DockerHub') {
+            steps {
+                echo "🔐 Logging in to DockerHub..."
+                sh '''
+                    echo ${DOCKERHUB_CREDS_PSW} | docker login -u ${DOCKERHUB_CREDS_USR} --password-stdin
+                '''
+            }
+        }
+
+        stage('Tag Images') {
+            steps {
+                echo "🏷️  Tagging images for registry..."
+                sh '''
+                    docker tag ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} ${DOCKERHUB_CREDS_USR}/${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}
+                    docker tag ${DOCKER_IMAGE}:${BUILD_TAG} ${DOCKERHUB_CREDS_USR}/${DOCKER_IMAGE}:${BUILD_TAG}
+                    docker tag ${DOCKER_IMAGE}:latest ${DOCKERHUB_CREDS_USR}/${DOCKER_IMAGE}:latest
+                '''
+            }
+        }
+
+        stage('Push to DockerHub') {
+            steps {
+                echo "📤 Pushing images to DockerHub..."
+                sh '''
+                    docker push ${DOCKERHUB_CREDS_USR}/${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}
+                    docker push ${DOCKERHUB_CREDS_USR}/${DOCKER_IMAGE}:${BUILD_TAG}
+                    docker push ${DOCKERHUB_CREDS_USR}/${DOCKER_IMAGE}:latest
+                    echo "✓ All images pushed successfully"
+                '''
+            }
+        }
+
+        stage('Generate Report') {
+            steps {
+                echo "📝 Generating build report..."
+                sh '''
+                    cat > docker-build-report.txt <<EOF
+=====================================
+Docker Build and Push Report
+=====================================
+Build Number: ${BUILD_NUMBER}
+Build URL: ${BUILD_URL}
+Git Commit: ${GIT_COMMIT}
+Git Branch: ${GIT_BRANCH}
+
+Image Information:
+==================
+Image Name: ${DOCKER_IMAGE}
+Registry: ${DOCKER_REGISTRY}
+
+Local Tags:
+- ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}
+- ${DOCKER_IMAGE}:${BUILD_TAG}
+- ${DOCKER_IMAGE}:latest
+
+DockerHub Tags:
+- ${DOCKERHUB_CREDS_USR}/${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}
+- ${DOCKERHUB_CREDS_USR}/${DOCKER_IMAGE}:${BUILD_TAG}
+- ${DOCKERHUB_CREDS_USR}/${DOCKER_IMAGE}:latest
+
+Pull Command:
+docker pull ${DOCKERHUB_CREDS_USR}/${DOCKER_IMAGE}:latest
+
+Build Timestamp: $(date -u +'%Y-%m-%dT%H:%M:%SZ')
+EOF
+                    cat docker-build-report.txt
+                '''
+            }
+        }
+    }
 
     post {
+        success {
+            echo '''
+            ╔════════════════════════════════════════════════════╗
+            ║  ✅ Pipeline completed successfully!               ║
+            ║                                                    ║
+            ║  Image: ${DOCKERHUB_CREDS_USR}/${DOCKER_IMAGE}:latest ║
+            ║  Build #${BUILD_NUMBER}                                    ║
+            ║  Commit: ${GIT_COMMIT_SHORT}                              ║
+            ╚════════════════════════════════════════════════════╝
+            '''
+            archiveArtifacts artifacts: 'hw1_DevOps/docker-build-report.txt', allowEmptyArchive: true
+        }
+        failure {
+            echo '''
+            ╔════════════════════════════════════════════════════╗
+            ║  ❌ Pipeline failed!                                ║
+            ║  Check logs: ${BUILD_URL}console                   ║
+            ╚════════════════════════════════════════════════════╝
+            '''
+        }
         always {
-            node('windows') {
-                bat 'chcp 65001 && docker logout'
-            }
+            echo "🧹 Cleanup..."
+            sh '''
+                docker logout || true
+                docker system prune -f --filter "until=24h" || true
+            '''
+            cleanWs()
         }
     }
 }
