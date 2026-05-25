@@ -162,6 +162,29 @@ EOF
                 archiveArtifacts artifacts: 'docker-build-info.txt', allowEmptyArchive: true
             }
         }
+        
+        stage('Trigger CD Pipeline') {
+            steps {
+                echo "🚀 Triggering CD pipeline for functional testing..."
+                script {
+                    try {
+                        def job = build(
+                            job: 'imagenet-classifier-cd',
+                            wait: false,
+                            parameters: [
+                                string(name: 'IMAGE_TAG', value: 'latest'),
+                                booleanParam(name: 'RUN_TESTS', value: true),
+                                booleanParam(name: 'CLEANUP_AFTER', value: true)
+                            ]
+                        )
+                        echo "✓ CD Pipeline triggered with build #${job.number}"
+                    } catch (Exception e) {
+                        echo "⚠️ Warning: Could not trigger CD pipeline - ${e.message}"
+                        echo "This is non-blocking - CD pipeline can be triggered manually"
+                    }
+                }
+            }
+        }
     }
     
     post {

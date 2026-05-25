@@ -1,50 +1,395 @@
 pipeline {
     agent any
 
-    environment {
-        DOCKERHUB_CREDS=credentials('mle-template')
-        LC_ALL = "en_US.UTF-8"
-        LANG    = "en_US.UTF-8"
-        LANGUAGE = "en_US.UTF-8"
+    parameters {
+        string(name: 'DOCKER_USERNAME', defaultValue: '', description: 'DockerHub username')
+        string(name: 'IMAGE_TAG', defaultValue: 'latest', description: 'Docker image tag to deploy (latest, commit-sha, build-number)')
+        string(name: 'CONTAINER_PORT', defaultValue: '8000', description: 'Container port')
+        string(name: 'HOST_PORT', defaultValue: '8000', description: 'Host port to map')
+        booleanParam(name: 'RUN_TESTS', defaultValue: true, description: 'Run functional tests')
+        booleanParam(name: 'CLEANUP_AFTER', defaultValue: true, description: 'Stop and remove container after tests')
     }
 
-options {
-        timestamps()
-        skipDefaultCheckout(true)
-	}
-    stages {
+    environment {
+        DOCKERHUB_CREDS = credentials('docker-hub')
+        DOCKER_IMAGE_NAME = 'imagenet-classifier'
+        DOCKER_REGISTRY = 'docker.io'
+        CONTAINER_NAME = 'imagenet-classifier-test'
+        LC_ALL = "en_US.UTF-8"
+        LANG = "en_US.UTF-8"
+        LANGUAGE = "en_US.UTF-8"
+        TEST_RESULTS_DIR = "${WORKSPACE}/test-results"
+    }
 
-        stage('Login'){
-            steps{
-                //withCredentials([usernamePassword(credentialsId: 'mle-template', passwordVariable: 'DOCKER_REGISTRY_PWD', usernameVariable: 'DOCKER_REGISTRY_USER')]){
-                //bat 'chcp 65001 && echo %DOCKER_REGISTRY_PWD% | docker login -u %DOCKER_REGISTRY_USER% --password-stdin'}
-                //bat 'chcp 65001 && echo %DOCKERHUB_CREDS_PSW% | docker login -u %DOCKERHUB_CREDS_USR% --password-stdin'
-                bat 'docker login -u %DOCKERHUB_CREDS_USR% -p %DOCKERHUB_CREDS_PSW%'
+    options {
+        timestamps()
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+
+    triggers {
+        // Расписание: каждый день в 2:00 UTC для автоматического тестирования latest image
+        cron('0 2 * * *')
+        
+        // Pipeline job trigger с CI pipeline (вызывается из последнего stage CI)
+        upstream(upstreamProjects: 'imagenet-classifier-build', threshold: hudson.model.Result.SUCCESS)
+    }
+
+    stages {
+        stage('Pre-flight Check') {
+            steps {
+                echo "══════════════════════════════════════════"
+                echo "CD Pipeline - Functional Testing"
+                echo "══════════════════════════════════════════"
+                echo "Image: ${DOCKERHUB_CREDS_USR}/${DOCKER_IMAGE_NAME}:${IMAGE_TAG}"
+                echo "Container Port: ${CONTAINER_PORT}"
+                echo "Host Port: ${HOST_PORT}"
+                echo "Run Tests: ${RUN_TESTS}"
+                echo "══════════════════════════════════════════"
+                
+                // Создаем директорию для результатов тестов
+                sh '''
+                    mkdir -p "${TEST_RESULTS_DIR}"
+                    echo "Test results directory created: ${TEST_RESULTS_DIR}"
+                '''
+                
+                // Проверяем Docker доступен
+                sh 'docker --version'
+            }
+        }
+
+        stage('Login to DockerHub') {
+            steps {
+                echo "🔐 Logging in to DockerHub..."
+                sh '''
+                    echo ${DOCKERHUB_CREDS_PSW} | docker login -u ${DOCKERHUB_CREDS_USR} --password-stdin
+                    echo "✓ Successfully logged in"
+                '''
+            }
+        }
+
+        stage('Pull Image') {
+            steps {
+                echo "📥 Pulling Docker image..."
+                sh '''
+                    echo "Pulling: ${DOCKERHUB_CREDS_USR}/${DOCKER_IMAGE_NAME}:${IMAGE_TAG}"
+                    docker pull ${DOCKERHUB_CREDS_USR}/${DOCKER_IMAGE_NAME}:${IMAGE_TAG}
+                    echo "✓ Image pulled successfully"
+                    
+                    # Проверяем что image существует
+                    docker inspect ${DOCKERHUB_CREDS_USR}/${DOCKER_IMAGE_NAME}:${IMAGE_TAG} > ${TEST_RESULTS_DIR}/image-info.txt
+                '''
+            }
+        }
+
+        stage('Stop Previous Container') {
+            steps {
+                echo "🛑 Stopping any previous containers..."
+                sh '''
+                    docker rm -f ${CONTAINER_NAME} || true
+                    echo "✓ Previous containers cleaned"
+                '''
+            }
+        }
+
+        stage('Start Container') {
+            steps {
+                echo "🚀 Starting container..."
+                sh '''
+                    docker run -d \
+                        --name ${CONTAINER_NAME} \
+                        -p ${HOST_PORT}:${CONTAINER_PORT} \
+                        --env VAULT_ADDR=http://localhost:8200 \
+                        --env USE_VAULT=false \
+                        --health-cmd="curl -f http://localhost:${CONTAINER_PORT}/health || exit 1" \
+                        --health-interval=10s \
+                        --health-timeout=5s \
+                        --health-retries=3 \
+                        ${DOCKERHUB_CREDS_USR}/${DOCKER_IMAGE_NAME}:${IMAGE_TAG}
+                    
+                    CONTAINER_ID=$(docker ps -q -f name=${CONTAINER_NAME})
+                    echo "Container ID: $CONTAINER_ID"
+                    echo "$CONTAINER_ID" > ${TEST_RESULTS_DIR}/container-id.txt
+                    
+                    # Ожидаем 5 секунд чтобы контейнер стартовал
+                    sleep 5
+                    
+                    # Проверяем статус контейнера
+                    docker ps --filter "name=${CONTAINER_NAME}"
+                '''
+            }
+        }
+
+        stage('Container Logs') {
+            steps {
+                echo "📋 Displaying container startup logs..."
+                sh '''
+                    echo "=== Container Logs (first 50 lines) ==="
+                    docker logs ${CONTAINER_NAME} | head -50 | tee ${TEST_RESULTS_DIR}/startup-logs.txt
+                    echo "=== End of logs ==="
+                '''
+            }
+        }
+
+        stage('Health Check') {
+            steps {
+                echo "❤️  Performing health check..."
+                script {
+                    sh '''
+                        echo "Waiting for API to be ready..."
+                        MAX_RETRIES=10
+                        RETRY=0
+                        
+                        while [ $RETRY -lt $MAX_RETRIES ]; do
+                            if curl -s -f http://localhost:${HOST_PORT}/health > /dev/null 2>&1; then
+                                echo "✓ Health check passed"
+                                exit 0
+                            fi
+                            RETRY=$((RETRY + 1))
+                            echo "  Attempt $RETRY/$MAX_RETRIES..."
+                            sleep 2
+                        done
+                        
+                        echo "✗ Health check failed after $MAX_RETRIES attempts"
+                        exit 1
+                    '''
                 }
             }
+        }
 
-        stage('Pull image'){
-            steps{
-                bat '''
-                        docker pull altairzero/mle-template:latest
+        stage('API Tests') {
+            when {
+                expression { params.RUN_TESTS == true }
+            }
+            steps {
+                echo "🧪 Running API endpoint tests..."
+                sh '''
+                    TEST_LOG="${TEST_RESULTS_DIR}/api-tests.txt"
+                    > "$TEST_LOG"  # Clear file
+                    
+                    echo "Testing API endpoints..." | tee -a "$TEST_LOG"
+                    
+                    # Test 1: Health endpoint
+                    echo "" | tee -a "$TEST_LOG"
+                    echo "TEST 1: GET /health" | tee -a "$TEST_LOG"
+                    echo "─────────────────────" | tee -a "$TEST_LOG"
+                    RESPONSE=$(curl -s -w "\\nHTTP_CODE:%{http_code}" http://localhost:${HOST_PORT}/health)
+                    HTTP_CODE=$(echo "$RESPONSE" | grep HTTP_CODE | cut -d: -f2)
+                    
+                    if [ "$HTTP_CODE" = "200" ]; then
+                        echo "✓ Status: 200 OK" | tee -a "$TEST_LOG"
+                        echo "$RESPONSE" | head -1 | tee -a "$TEST_LOG"
+                    else
+                        echo "✗ Status: $HTTP_CODE (Expected 200)" | tee -a "$TEST_LOG"
+                        exit 1
+                    fi
+                    
+                    # Test 2: Info endpoint
+                    echo "" | tee -a "$TEST_LOG"
+                    echo "TEST 2: GET /info" | tee -a "$TEST_LOG"
+                    echo "─────────────────────" | tee -a "$TEST_LOG"
+                    RESPONSE=$(curl -s -w "\\nHTTP_CODE:%{http_code}" http://localhost:${HOST_PORT}/info)
+                    HTTP_CODE=$(echo "$RESPONSE" | grep HTTP_CODE | cut -d: -f2)
+                    
+                    if [ "$HTTP_CODE" = "200" ]; then
+                        echo "✓ Status: 200 OK" | tee -a "$TEST_LOG"
+                        echo "$RESPONSE" | head -5 | tee -a "$TEST_LOG"
+                    else
+                        echo "✗ Status: $HTTP_CODE (Expected 200)" | tee -a "$TEST_LOG"
+                        exit 1
+                    fi
+                    
+                    # Test 3: POST /predict endpoint
+                    echo "" | tee -a "$TEST_LOG"
+                    echo "TEST 3: POST /predict" | tee -a "$TEST_LOG"
+                    echo "─────────────────────" | tee -a "$TEST_LOG"
+                    
+                    # Generate random pixel data (2352 floats)
+                    PAYLOAD=$(python3 << 'PYTHON'
+import json
+import random
+pixels = [random.random() for _ in range(2352)]
+print(json.dumps({"pixels": pixels}))
+PYTHON
+)
+                    
+                    RESPONSE=$(curl -s -w "\\nHTTP_CODE:%{http_code}" \
+                        -X POST http://localhost:${HOST_PORT}/predict \
+                        -H "Content-Type: application/json" \
+                        -d "$PAYLOAD")
+                    HTTP_CODE=$(echo "$RESPONSE" | grep HTTP_CODE | cut -d: -f2)
+                    
+                    if [ "$HTTP_CODE" = "200" ]; then
+                        echo "✓ Status: 200 OK" | tee -a "$TEST_LOG"
+                        echo "$RESPONSE" | head -5 | tee -a "$TEST_LOG"
+                    else
+                        echo "✗ Status: $HTTP_CODE (Expected 200)" | tee -a "$TEST_LOG"
+                        exit 1
+                    fi
+                    
+                    echo "" | tee -a "$TEST_LOG"
+                    echo "All API tests passed ✓" | tee -a "$TEST_LOG"
                 '''
             }
         }
 
-        stage('Run container'){
-            steps{
-                bat '''
-                        docker run --name mle-template -p 80:5556 -d altairzero/mle-template:latest
+        stage('Performance Metrics') {
+            when {
+                expression { params.RUN_TESTS == true }
+            }
+            steps {
+                echo "⚡ Collecting performance metrics..."
+                sh '''
+                    METRICS_LOG="${TEST_RESULTS_DIR}/performance.txt"
+                    > "$METRICS_LOG"
+                    
+                    echo "=== Container Performance Metrics ===" | tee -a "$METRICS_LOG"
+                    echo "Timestamp: $(date -u +'%Y-%m-%dT%H:%M:%SZ')" | tee -a "$METRICS_LOG"
+                    echo "" | tee -a "$METRICS_LOG"
+                    
+                    # Docker inspect for resource info
+                    echo "Container Details:" | tee -a "$METRICS_LOG"
+                    docker inspect ${CONTAINER_NAME} | grep -E '"Id"|"State"|"Image"' | tee -a "$METRICS_LOG"
+                    
+                    echo "" | tee -a "$METRICS_LOG"
+                    echo "Container Stats:" | tee -a "$METRICS_LOG"
+                    docker stats ${CONTAINER_NAME} --no-stream | tee -a "$METRICS_LOG"
+                    
+                    echo "" | tee -a "$METRICS_LOG"
+                    echo "Response Time Test:" | tee -a "$METRICS_LOG"
+                    
+                    for i in 1 2 3; do
+                        TIME=$(curl -s -o /dev/null -w '%{time_total}' http://localhost:${HOST_PORT}/health)
+                        echo "  Request $i: ${TIME}s" | tee -a "$METRICS_LOG"
+                    done
                 '''
             }
         }
-	}
+
+        stage('Docker Logs Capture') {
+            steps {
+                echo "📝 Capturing full container logs..."
+                sh '''
+                    LOGS_FILE="${TEST_RESULTS_DIR}/container-logs.txt"
+                    docker logs ${CONTAINER_NAME} > "$LOGS_FILE" 2>&1
+                    echo "Logs saved to: $LOGS_FILE"
+                    
+                    # Show last 20 lines
+                    echo "=== Last 20 lines of logs ==="
+                    tail -20 "$LOGS_FILE"
+                '''
+            }
+        }
+
+        stage('Generate Test Report') {
+            steps {
+                echo "📊 Generating test report..."
+                sh '''
+                    REPORT="${TEST_RESULTS_DIR}/test-report.txt"
+                    
+                    cat > "$REPORT" <<'REPORT_END'
+═══════════════════════════════════════════════════════════════
+                    CD PIPELINE TEST REPORT
+═══════════════════════════════════════════════════════════════
+REPORT_END
+                    
+                    echo "Build Information:" >> "$REPORT"
+                    echo "  Build Number: ${BUILD_NUMBER}" >> "$REPORT"
+                    echo "  Build URL: ${BUILD_URL}" >> "$REPORT"
+                    echo "  Timestamp: $(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$REPORT"
+                    echo "" >> "$REPORT"
+                    
+                    echo "Deployment Configuration:" >> "$REPORT"
+                    echo "  Image: ${DOCKERHUB_CREDS_USR}/${DOCKER_IMAGE_NAME}:${IMAGE_TAG}" >> "$REPORT"
+                    echo "  Container Name: ${CONTAINER_NAME}" >> "$REPORT"
+                    echo "  Port Mapping: ${HOST_PORT}:${CONTAINER_PORT}" >> "$REPORT"
+                    echo "  Container ID: $(cat ${TEST_RESULTS_DIR}/container-id.txt 2>/dev/null || echo 'N/A')" >> "$REPORT"
+                    echo "" >> "$REPORT"
+                    
+                    echo "Test Results:" >> "$REPORT"
+                    echo "  Health Check: ✓ PASSED" >> "$REPORT"
+                    
+                    if [ -f "${TEST_RESULTS_DIR}/api-tests.txt" ]; then
+                        echo "  API Tests: ✓ PASSED" >> "$REPORT"
+                    else
+                        echo "  API Tests: ⊘ SKIPPED" >> "$REPORT"
+                    fi
+                    
+                    echo "" >> "$REPORT"
+                    echo "Test Files:" >> "$REPORT"
+                    ls -lah "${TEST_RESULTS_DIR}/"  >> "$REPORT"
+                    
+                    echo "" >> "$REPORT"
+                    echo "═══════════════════════════════════════════════════════════════" >> "$REPORT"
+                    
+                    cat "$REPORT"
+                '''
+            }
+        }
+    }
 
     post {
+        success {
+            echo '''
+            ╔════════════════════════════════════════════════╗
+            ║  ✅ CD Pipeline Test Completed Successfully!   ║
+            ║                                                ║
+            ║  Container Status: RUNNING ✓                  ║
+            ║  All Tests: PASSED ✓                          ║
+            ╚════════════════════════════════════════════════╝
+            '''
+            
+            // Archive test results
+            archiveArtifacts artifacts: 'test-results/**', allowEmptyArchive: true
+        }
+
+        failure {
+            echo '''
+            ╔════════════════════════════════════════════════╗
+            ║  ❌ CD Pipeline Failed!                         ║
+            ║                                                ║
+            ║  Check console output for details              ║
+            ║  Build URL: ${BUILD_URL}                       ║
+            ╚════════════════════════════════════════════════╝
+            '''
+            
+            // Capture logs even on failure
+            sh '''
+                docker logs ${CONTAINER_NAME} > ${TEST_RESULTS_DIR}/failure-logs.txt 2>&1 || true
+                docker ps -a >> ${TEST_RESULTS_DIR}/docker-ps.txt 2>&1 || true
+            '''
+            
+            archiveArtifacts artifacts: 'test-results/**', allowEmptyArchive: true
+        }
+
         always {
-            node('windows') {
-                bat 'docker stop mle-template && docker logout'
+            echo "🧹 Cleanup stage..."
+            script {
+                if (params.CLEANUP_AFTER) {
+                    sh '''
+                        echo "Stopping and removing container..."
+                        docker stop ${CONTAINER_NAME} || true
+                        docker rm ${CONTAINER_NAME} || true
+                        
+                        echo "Logging out from Docker..."
+                        docker logout || true
+                        
+                        echo "✓ Cleanup completed"
+                    '''
+                } else {
+                    sh '''
+                        echo "Container will remain running for inspection"
+                        echo "Container Name: ${CONTAINER_NAME}"
+                        echo "Command to stop: docker stop ${CONTAINER_NAME}"
+                        docker ps --filter "name=${CONTAINER_NAME}"
+                        
+                        docker logout || true
+                    '''
+                }
             }
+            
+            // Clean workspace if needed
+            cleanWs(patterns: [[pattern: 'test-results/**', type: 'INCLUDE']], deleteDirs: false)
         }
     }
 }
