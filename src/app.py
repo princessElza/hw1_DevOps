@@ -6,7 +6,6 @@ from typing import List
 import os
 from src.logger import Logger
 from src.vault_secrets import vault_client
-from src.vault_init import init_vault_secrets
 from PIL import Image
 import io
 import psycopg2
@@ -15,9 +14,6 @@ SHOW_LOG = True
 
 # Настройка логгера
 logger = Logger(SHOW_LOG).get_logger(__name__)
-
-# Инициализация секретов в Vault (при необходимости)
-init_vault_secrets()
 
 # Загружаем модель
 model_path = os.path.join(os.getcwd(), "models", "model.pkl")
