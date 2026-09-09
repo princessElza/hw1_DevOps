@@ -201,14 +201,14 @@ EOF
                     echo "TEST 3: POST /predict" | tee -a "$TEST_LOG"
                     echo "─────────────────────" | tee -a "$TEST_LOG"
                     
-                    # Generate random pixel data (2352 floats)
-                    PAYLOAD=$(python3 << 'PYTHON'
-import json
-import random
-pixels = [random.random() for _ in range(2352)]
-print(json.dumps({"pixels": pixels}))
-PYTHON
-)
+                    # Generate test pixel data (2352 floats) without Python dependency
+                    PAYLOAD=$(awk 'BEGIN {
+                        printf "{\"pixels\":["
+                        for (i = 1; i <= 2352; i++) {
+                            printf "0.5%s", (i < 2352 ? "," : "")
+                        }
+                        print "]}"
+                    }')
                     
                     RESPONSE=$(printf '%s' "$PAYLOAD" | docker exec -i ${CONTAINER_NAME} curl -s -w "\\nHTTP_CODE:%{http_code}" \
                         -X POST http://localhost:${CONTAINER_PORT}/predict \
