@@ -14,7 +14,7 @@ pipeline {
         DOCKERHUB_CREDS = credentials('docker-hub')
         DOCKER_IMAGE_NAME = 'imagenet-classifier'
         DOCKER_REGISTRY = 'docker.io'
-        CONTAINER_NAME = 'imagenet-classifier-test'
+        CONTAINER_NAME = 'imagenet-classifier'
         LC_ALL = "en_US.UTF-8"
         LANG = "en_US.UTF-8"
         LANGUAGE = "en_US.UTF-8"
@@ -138,7 +138,7 @@ EOF
                         RETRY=0
                         
                         while [ $RETRY -lt $MAX_RETRIES ]; do
-                            if curl -s -f http://localhost:${HOST_PORT}/health > /dev/null 2>&1; then
+                            if docker exec ${CONTAINER_NAME} curl -s -f http://localhost:${CONTAINER_PORT}/health > /dev/null 2>&1; then
                                 echo "✓ Health check passed"
                                 exit 0
                             fi
@@ -170,7 +170,7 @@ EOF
                     echo "" | tee -a "$TEST_LOG"
                     echo "TEST 1: GET /health" | tee -a "$TEST_LOG"
                     echo "─────────────────────" | tee -a "$TEST_LOG"
-                    RESPONSE=$(curl -s -w "\\nHTTP_CODE:%{http_code}" http://localhost:${HOST_PORT}/health)
+                    RESPONSE=$(docker exec ${CONTAINER_NAME} curl -s -w "\\nHTTP_CODE:%{http_code}" http://localhost:${CONTAINER_PORT}/health)
                     HTTP_CODE=$(echo "$RESPONSE" | grep HTTP_CODE | cut -d: -f2)
                     
                     if [ "$HTTP_CODE" = "200" ]; then
@@ -185,7 +185,7 @@ EOF
                     echo "" | tee -a "$TEST_LOG"
                     echo "TEST 2: GET /info" | tee -a "$TEST_LOG"
                     echo "─────────────────────" | tee -a "$TEST_LOG"
-                    RESPONSE=$(curl -s -w "\\nHTTP_CODE:%{http_code}" http://localhost:${HOST_PORT}/info)
+                    RESPONSE=$(docker exec ${CONTAINER_NAME} curl -s -w "\\nHTTP_CODE:%{http_code}" http://localhost:${CONTAINER_PORT}/info)
                     HTTP_CODE=$(echo "$RESPONSE" | grep HTTP_CODE | cut -d: -f2)
                     
                     if [ "$HTTP_CODE" = "200" ]; then
@@ -210,10 +210,10 @@ print(json.dumps({"pixels": pixels}))
 PYTHON
 )
                     
-                    RESPONSE=$(curl -s -w "\\nHTTP_CODE:%{http_code}" \
-                        -X POST http://localhost:${HOST_PORT}/predict \
+                    RESPONSE=$(printf '%s' "$PAYLOAD" | docker exec -i ${CONTAINER_NAME} curl -s -w "\\nHTTP_CODE:%{http_code}" \
+                        -X POST http://localhost:${CONTAINER_PORT}/predict \
                         -H "Content-Type: application/json" \
-                        -d "$PAYLOAD")
+                        -d @-)
                     HTTP_CODE=$(echo "$RESPONSE" | grep HTTP_CODE | cut -d: -f2)
                     
                     if [ "$HTTP_CODE" = "200" ]; then
@@ -256,7 +256,7 @@ PYTHON
                     echo "Response Time Test:" | tee -a "$METRICS_LOG"
                     
                     for i in 1 2 3; do
-                        TIME=$(curl -s -o /dev/null -w '%{time_total}' http://localhost:${HOST_PORT}/health)
+                        TIME=$(docker exec ${CONTAINER_NAME} curl -s -o /dev/null -w '%{time_total}' http://localhost:${CONTAINER_PORT}/health)
                         echo "  Request $i: ${TIME}s" | tee -a "$METRICS_LOG"
                     done
                 '''
