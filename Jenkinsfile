@@ -87,8 +87,8 @@ pipeline {
                         --env USE_VAULT=false \
                         ${DOCKER_IMAGE_NAME}:latest
                     sleep 5
-                    curl -f http://localhost:8000/health || exit 1
-                    curl -f http://localhost:8000/info || exit 1
+                    docker exec test-api curl -f http://localhost:8000/health || exit 1
+                    docker exec test-api curl -f http://localhost:8000/info || exit 1
                     docker stop test-api && docker rm test-api
                     echo "✓ API health check passed"
                 '''
