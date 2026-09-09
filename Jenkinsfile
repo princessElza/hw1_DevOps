@@ -24,7 +24,7 @@ pipeline {
             steps {
                 echo "📦 Checking out source code..."
                 checkout scm
-                sh 'git log -1 --oneline'
+                sh 'git config --global --add safe.directory "$WORKSPACE"'
             }
         }
         
