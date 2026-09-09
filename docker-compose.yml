@@ -75,9 +75,10 @@ services:
   #  ML модель
   model-api:
     build: .
+    image: ${MODEL_IMAGE:-imagenet-classifier:latest}
     container_name: imagenet-classifier
     ports:
-      - "8000:8000"
+      - "${HOST_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy

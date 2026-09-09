@@ -55,6 +55,7 @@ pipeline {
                 
                 // Проверяем Docker доступен
                 sh 'docker --version'
+                sh 'docker compose version'
             }
         }
 
@@ -84,38 +85,33 @@ pipeline {
 
         stage('Stop Previous Container') {
             steps {
-                echo "🛑 Stopping any previous containers..."
+                echo "🛑 Preparing Docker Compose environment..."
                 sh '''
-                    docker rm -f ${CONTAINER_NAME} || true
-                    echo "✓ Previous containers cleaned"
+                    set +x
+                    cat > .cd.env <<EOF
+DB_USER=ci_user
+DB_PASSWORD=ci-${BUILD_NUMBER}
+DB_NAME=ci_predictions
+VAULT_TOKEN=vault-${BUILD_NUMBER}
+USE_VAULT=true
+HOST_PORT=${HOST_PORT}
+MODEL_IMAGE=${DOCKERHUB_CREDS_USR}/${DOCKER_IMAGE_NAME}:${IMAGE_TAG}
+EOF
+                    docker compose --env-file .cd.env down -v --remove-orphans || true
+                    echo "✓ Compose environment prepared"
                 '''
             }
         }
 
         stage('Start Container') {
             steps {
-                echo "🚀 Starting container..."
+                echo "🚀 Starting Vault, PostgreSQL and model API..."
                 sh '''
-                    docker run -d \
-                        --name ${CONTAINER_NAME} \
-                        -p ${HOST_PORT}:${CONTAINER_PORT} \
-                        --env VAULT_ADDR=http://localhost:8200 \
-                        --env USE_VAULT=false \
-                        --health-cmd="curl -f http://localhost:${CONTAINER_PORT}/health || exit 1" \
-                        --health-interval=10s \
-                        --health-timeout=5s \
-                        --health-retries=3 \
-                        ${DOCKERHUB_CREDS_USR}/${DOCKER_IMAGE_NAME}:${IMAGE_TAG}
-                    
+                    docker compose --env-file .cd.env up -d --no-build
                     CONTAINER_ID=$(docker ps -q -f name=${CONTAINER_NAME})
                     echo "Container ID: $CONTAINER_ID"
                     echo "$CONTAINER_ID" > ${TEST_RESULTS_DIR}/container-id.txt
-                    
-                    # Ожидаем 5 секунд чтобы контейнер стартовал
-                    sleep 5
-                    
-                    # Проверяем статус контейнера
-                    docker ps --filter "name=${CONTAINER_NAME}"
+                    docker compose --env-file .cd.env ps
                 '''
             }
         }
@@ -125,7 +121,8 @@ pipeline {
                 echo "📋 Displaying container startup logs..."
                 sh '''
                     echo "=== Container Logs (first 50 lines) ==="
-                    docker logs ${CONTAINER_NAME} | head -50 | tee ${TEST_RESULTS_DIR}/startup-logs.txt
+                    docker compose --env-file .cd.env logs --no-color | head -100 | tee ${TEST_RESULTS_DIR}/startup-logs.txt
+                    docker compose --env-file .cd.env logs --no-color model-api | grep 'Учетные данные БД получены из Vault'
                     echo "=== End of logs ==="
                 '''
             }
@@ -271,7 +268,7 @@ PYTHON
                 echo "📝 Capturing full container logs..."
                 sh '''
                     LOGS_FILE="${TEST_RESULTS_DIR}/container-logs.txt"
-                    docker logs ${CONTAINER_NAME} > "$LOGS_FILE" 2>&1
+                    docker compose --env-file .cd.env logs --no-color > "$LOGS_FILE" 2>&1
                     echo "Logs saved to: $LOGS_FILE"
                     
                     # Show last 20 lines
@@ -368,8 +365,8 @@ REPORT_END
                 if (params.CLEANUP_AFTER) {
                     sh '''
                         echo "Stopping and removing container..."
-                        docker stop ${CONTAINER_NAME} || true
-                        docker rm ${CONTAINER_NAME} || true
+                        docker compose --env-file .cd.env down -v --remove-orphans || true
+                        rm -f .cd.env
                         
                         echo "Logging out from Docker..."
                         docker logout || true
@@ -379,9 +376,7 @@ REPORT_END
                 } else {
                     sh '''
                         echo "Container will remain running for inspection"
-                        echo "Container Name: ${CONTAINER_NAME}"
-                        echo "Command to stop: docker stop ${CONTAINER_NAME}"
-                        docker ps --filter "name=${CONTAINER_NAME}"
+                        docker compose --env-file .cd.env ps
                         
                         docker logout || true
                     '''
