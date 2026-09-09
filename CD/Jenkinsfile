@@ -41,10 +41,10 @@ pipeline {
                 echo "══════════════════════════════════════════"
                 echo "CD Pipeline - Functional Testing"
                 echo "══════════════════════════════════════════"
-                echo "Image: ${DOCKERHUB_CREDS_USR}/${DOCKER_IMAGE_NAME}:${IMAGE_TAG}"
-                echo "Container Port: ${CONTAINER_PORT}"
-                echo "Host Port: ${HOST_PORT}"
-                echo "Run Tests: ${RUN_TESTS}"
+                echo "Image: ${DOCKERHUB_CREDS_USR}/${DOCKER_IMAGE_NAME}:${params.IMAGE_TAG}"
+                echo "Container Port: ${params.CONTAINER_PORT}"
+                echo "Host Port: ${params.HOST_PORT}"
+                echo "Run Tests: ${params.RUN_TESTS}"
                 echo "══════════════════════════════════════════"
                 
                 // Создаем директорию для результатов тестов
