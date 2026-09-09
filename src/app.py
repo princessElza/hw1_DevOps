@@ -259,19 +259,17 @@ def info():
 @app.get("/predictions")
 def get_predictions():
     try:
-        import psycopg2
-        conn = psycopg2.connect(
-            host=os.getenv('DB_HOST', 'localhost'),
-            user=os.getenv('DB_USER'),
-            password=os.getenv('DB_PASSWORD'),
-            database=os.getenv('DB_NAME')
-        )
+        conn = get_db_connection()
+        if conn is None:
+            raise HTTPException(status_code=503, detail="База данных недоступна")
         cur = conn.cursor()
         cur.execute("SELECT id, timestamp, prediction, class_name, confidence, file_name FROM predictions ORDER BY timestamp DESC LIMIT 20")
         rows = cur.fetchall()
         cur.close()
         conn.close()
         return {"predictions": [{"id": r[0], "timestamp": str(r[1]), "prediction": r[2], "class_name": r[3], "confidence": r[4], "file_name": r[5]} for r in rows]}
+    except HTTPException:
+        raise
     except Exception as e:
         return {"error": str(e)}
 

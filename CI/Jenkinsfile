@@ -19,7 +19,7 @@ pipeline {
             steps {
                 echo "📦 Cloning repository..."
                 cleanWs()
-                sh 'git clone -b main https://github.com/IcyAltair/hw1_DevOps.git || true'
+                sh 'git clone -b feat/hw3 https://github.com/princessElza/hw1_DevOps.git'
             }
         }
 
@@ -55,7 +55,7 @@ pipeline {
                 echo "🧪 Running unit tests..."
                 sh '''
                     cd hw1_DevOps
-                    pytest src/unit_tests/ -v --tb=short || true
+                    pytest src/unit_tests/ -v --tb=short
                 '''
             }
         }

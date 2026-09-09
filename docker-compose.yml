@@ -69,8 +69,8 @@ services:
       retries: 5
     restart: unless-stopped
     depends_on:
-      vault:
-        condition: service_healthy
+      vault-init:
+        condition: service_completed_successfully
 
   #  ML модель
   model-api:

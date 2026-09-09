@@ -42,7 +42,7 @@ pipeline {
         stage('Unit Tests') {
             steps {
                 echo "🧪 Running unit tests..."
-                sh 'pytest src/unit_tests/ -v --tb=short || true'
+                sh 'pytest src/unit_tests/ -v --tb=short'
             }
         }
         

@@ -15,8 +15,12 @@ class VaultSecrets:
     
     def __init__(self):
         self.vault_addr = os.getenv('VAULT_ADDR', 'http://localhost:8200')
-        self.vault_token = os.getenv('VAULT_TOKEN', 'root')
+        self.vault_token = os.getenv('VAULT_TOKEN')
         self.use_vault = os.getenv('USE_VAULT', 'true').lower() in ('true', '1', 'yes')
+        self.vault_required = self.use_vault
+
+        if self.vault_required and not self.vault_token:
+            raise RuntimeError("VAULT_TOKEN должен быть задан при USE_VAULT=true")
         self.headers = {
             'X-Vault-Token': self.vault_token,
             'Content-Type': 'application/json'
@@ -36,7 +40,7 @@ class VaultSecrets:
                 logger.info("Успешное подключение к Vault")
                 return True
         except Exception as e:
-            logger.warning(f"Не удалось подключиться к Vault: {e}. Будут использованы переменные окружения")
+            logger.error(f"Не удалось подключиться к Vault: {e}")
             self.use_vault = False
             return False
         return False
@@ -113,7 +117,10 @@ class VaultSecrets:
                     'database': vault_secret.get('DB_NAME'),
                 }
         
-        # Fallback на переменные окружения
+        if self.vault_required:
+            raise RuntimeError("Учетные данные БД не удалось получить из Vault")
+
+        # Явный режим без Vault используется только для изолированных тестов
         logger.info("Учетные данные БД получены из переменных окружения")
         return {
             'host': os.getenv('DB_HOST', credentials['host']),
