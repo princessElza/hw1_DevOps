@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # Хранилище секретов Vault
   vault:
-    image: vault:latest
+    image: hashicorp/vault:latest
     container_name: vault-secrets
     environment:
       VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_TOKEN}
@@ -19,12 +19,34 @@ services:
     cap_add:
       - IPC_LOCK
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8200/v1/sys/health"]
+      test: ["CMD", "vault", "status"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
     command: server -dev
+
+  # Однократная загрузка секретов в Vault
+  vault-init:
+    image: hashicorp/vault:latest
+    container_name: vault-init
+    entrypoint: /bin/sh
+    depends_on:
+      vault:
+        condition: service_healthy
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_TOKEN}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+    command:
+      - -c
+      - |
+        vault kv put secret/database/credentials           DB_HOST=postgres           DB_PORT=5432           DB_USER="$$DB_USER"           DB_PASSWORD="$$DB_PASSWORD"           DB_NAME="$$DB_NAME"
+    networks:
+      - ml-network
+
 
   # База данных PostgreSQL
   postgres:
@@ -60,11 +82,6 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_USER: ${DB_USER}
-      DB_PASSWORD: ${DB_PASSWORD}
-      DB_NAME: ${DB_NAME}
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: ${VAULT_TOKEN}
       USE_VAULT: ${USE_VAULT:-true}

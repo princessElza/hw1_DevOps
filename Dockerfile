@@ -15,14 +15,11 @@ COPY config.ini .
 COPY src/logger.py ./src/
 
 # Копируем скрипт инициализации и конфиг
-COPY .env .env
-COPY scripts/vault-init-build.py /app/vault_init.py
 
 RUN mkdir -p logs
 
 # Инициализация Vault при сборке контейнера
 # Примечание: это будет выполнено при docker build если Vault доступен
-RUN python3 /app/vault_init.py || true
 
 EXPOSE 8000
 
