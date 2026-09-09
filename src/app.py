@@ -6,7 +6,7 @@ from typing import List
 import os
 from src.logger import Logger
 from src.vault_secrets import vault_client
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 import io
 import psycopg2
 
@@ -81,6 +81,9 @@ CLASS_NAMES = {
     0: "spider",
     1: "slug",
 }
+
+# Если модель не уверена в ответе, не называем изображение пауком или слизняком
+MIN_IMAGE_CONFIDENCE = 0.70
 
 # ========== НОВЫЕ ФУНКЦИИ ДЛЯ БАЗЫ ДАННЫХ ==========
 
@@ -208,7 +211,13 @@ async def predict_image(file: UploadFile = File(...)):
     try:
         # Читаем файл
         contents = await file.read()
-        image = Image.open(io.BytesIO(contents))
+        if not contents:
+            raise HTTPException(status_code=400, detail="Загруженный файл пуст")
+
+        try:
+            image = Image.open(io.BytesIO(contents))
+        except UnidentifiedImageError:
+            raise HTTPException(status_code=400, detail="Файл не является корректным изображением")
         
         # Превращаем в 28×28 RGB
         image = image.convert('RGB')
@@ -216,6 +225,9 @@ async def predict_image(file: UploadFile = File(...)):
         
         # Превращаем в вектор
         pixels = np.array(image).flatten() / 255.0
+
+        if np.ptp(pixels) == 0:
+            raise HTTPException(status_code=400, detail="Изображение пустое или однотонное")
         
         # Проверяем размер
         if len(pixels) != 2352:
@@ -229,6 +241,10 @@ async def predict_image(file: UploadFile = File(...)):
         probabilities = model.predict_proba([pixels])[0]
         confidence = float(max(probabilities))
 
+        if confidence < MIN_IMAGE_CONFIDENCE:
+            prediction = -1
+            class_name = "unknown"
+
         # Сохраняем в БД с использованием Vault
         save_to_db(int(prediction), class_name, confidence, file.filename)
         
@@ -241,6 +257,8 @@ async def predict_image(file: UploadFile = File(...)):
             "file_name": file.filename
         }
     
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Ошибка при загрузке картинки: {e}")
         raise HTTPException(status_code=500, detail=str(e))
