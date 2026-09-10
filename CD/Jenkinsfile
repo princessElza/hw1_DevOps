@@ -227,8 +227,7 @@ EOF
                     echo "" | tee -a "$TEST_LOG"
                     echo "TEST 4: Kafka Consumer" | tee -a "$TEST_LOG"
                     echo "─────────────────────" | tee -a "$TEST_LOG"
-                    sleep 3
-                    docker compose --env-file .cd.env logs --no-color kafka-consumer | grep 'Kafka consumer получил результат' | tee -a "$TEST_LOG"
+                    sh scripts/check-kafka-consumer.sh | tee -a "$TEST_LOG"
                     echo "✓ Kafka Consumer получил сообщение" | tee -a "$TEST_LOG"
 
                     echo "" | tee -a "$TEST_LOG"
