@@ -85,6 +85,7 @@ pipeline {
                         --name test-api \
                         --env VAULT_ADDR=http://localhost:8200 \
                         --env USE_VAULT=false \
+                        --env KAFKA_ENABLED=false \
                         ${DOCKER_IMAGE_NAME}:latest
                     sleep 5
                     docker exec test-api curl -f http://localhost:8000/health || exit 1

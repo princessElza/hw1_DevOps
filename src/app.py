@@ -9,6 +9,8 @@ from src.vault_secrets import vault_client
 from PIL import Image, UnidentifiedImageError
 import io
 import psycopg2
+import json
+from kafka import KafkaProducer
 
 SHOW_LOG = True
 
@@ -84,6 +86,34 @@ CLASS_NAMES = {
 
 # Если модель не уверена в ответе, не называем изображение пауком или слизняком
 MIN_IMAGE_CONFIDENCE = 0.70
+
+
+def publish_prediction_event(prediction, class_name, confidence, file_name=None):
+    """Отправляет результат предсказания в Kafka для consumer-сервиса."""
+    if os.getenv("KAFKA_ENABLED", "true").lower() != "true":
+        return
+
+    event = {
+        "prediction": int(prediction),
+        "class_name": class_name,
+        "confidence": float(confidence),
+        "file_name": file_name,
+    }
+    producer = None
+    try:
+        producer = KafkaProducer(
+            bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092"),
+            value_serializer=lambda value: json.dumps(value).encode("utf-8"),
+            retries=3,
+        )
+        producer.send(os.getenv("KAFKA_TOPIC", "prediction-events"), event).get(timeout=10)
+        logger.info("Результат предсказания отправлен в Kafka")
+    except Exception as e:
+        # API продолжает работать, но ошибка Kafka будет видна в логах.
+        logger.error(f"Не удалось отправить результат в Kafka: {e}")
+    finally:
+        if producer is not None:
+            producer.close()
 
 # ========== НОВЫЕ ФУНКЦИИ ДЛЯ БАЗЫ ДАННЫХ ==========
 
@@ -190,6 +220,7 @@ def predict(request: ImageRequest):
         class_name = CLASS_NAMES.get(prediction, f"class_{prediction}")
         
         logger.info(f"Предсказание: класс {prediction} ({class_name}), уверенность: {confidence:.3f}")
+        publish_prediction_event(prediction, class_name, confidence)
         
         return ImageResponse(
             prediction=int(prediction),
@@ -247,6 +278,7 @@ async def predict_image(file: UploadFile = File(...)):
 
         # Сохраняем в БД с использованием Vault
         save_to_db(int(prediction), class_name, confidence, file.filename)
+        publish_prediction_event(prediction, class_name, confidence, file.filename)
         
         logger.info(f"Загружена картинка: предсказание {prediction} ({class_name}), уверенность: {confidence:.3f}")
         
